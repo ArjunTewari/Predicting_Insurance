@@ -1,4 +1,5 @@
 import pandas as pd
+import os
 from taipy import Gui
 import seaborn as sns
 import taipy.gui.builder as tgb
@@ -193,4 +194,6 @@ Number of children : <|{user_children}|number|width = 600px|>
 """
 
 if __name__== "__main__":
-    Gui(page).run(use_reloader=True, debug=True, port=5500)
+    app = Gui(page)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
