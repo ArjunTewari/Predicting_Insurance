@@ -1,13 +1,21 @@
 import pandas as pd
 import os
 from taipy import Gui
-import seaborn as sns
 import taipy.gui.builder as tgb
 import matplotlib.pyplot as plt
 import matplotlib
 from sklearn.svm import SVR
-
-
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+def evaluate_model_performance(y_true, y_pred):
+    mae = mean_absolute_error(y_true, y_pred)
+    mse = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+    r2 = r2_score(y_true, y_pred)
+    return rmse, r2, mae
+    # print(f"MAE: {mae}")
+    # print(f"MSE: {mse}")
+    # print(f"RMSE: {rmse}")
+    # print(f"R²: {r2:.2f}")
 
 from sklearn.model_selection import train_test_split
 import numpy as np
@@ -17,38 +25,18 @@ df = pd.DataFrame(data)
 df = df.interpolate()
 
 correlation_matrix = df[["age","bmi","charges"]].corr()
-# sns.heatmap(correlation_matrix, annot=True, cmap="coolwarm")
-# plt.title("Correlation Matrix")
-# plt.show()
-sorted_corr = correlation_matrix["charges"].sort_values(ascending=False).reset_index()
 
-# Analyze average charges based on smoker status
-# print(df.groupby("smoker")["charges"].mean())
-# print(df.groupby("region")["charges"].mean())
+sorted_corr = correlation_matrix["charges"].sort_values(ascending=False).reset_index()
 
 df["age_smoker_interaction"] = df["age"] * (df["smoker"] == "yes").astype(int)
 
-# correlation_matrix_1 = df[["age_smoker_interaction","charges"]].corr()
-# sns.heatmap(correlation_matrix_1, annot=True, cmap="coolwarm")
-# plt.title("Correlation Matrix")
-# plt.show()
 
-# Scatter plot to visualize Age vs. Charges, differentiated by Smoker Status
-
-# sns.scatterplot(data=df, x="age", y="charges", hue="smoker", palette="coolwarm", alpha=0.7)
-# plt.title("Age vs. Charges (by Smoker Status)")
-# plt.xlabel("Age")
-# plt.ylabel("Charges")
-# plt.legend(title="Smoker Status")
-# plt.show()
 
 df["age_bmi_interaction"] = df["age"] * df["bmi"]
-# correlation_matrix_2 = df[["age_bmi_interaction","charges"]].corr()
-# sns.heatmap(correlation_matrix_2, annot=True, cmap="coolwarm")
-# plt.title("Correlation Matrix")
-# plt.show()
 
 df_encoded = pd.get_dummies(data=df, columns=['sex', 'region', 'smoker'], drop_first=True)
+
+df["log_charges"] = np.log(df["charges"])
 
 train, test = train_test_split(df_encoded, test_size=0.2, random_state=42)
 
@@ -57,48 +45,61 @@ y_train = train["charges"]
 x_test = test.drop(columns=["charges"])
 y_test = test["charges"]
 
+from sklearn.preprocessing import MinMaxScaler
+
+scaler_x = MinMaxScaler()
+x_train_scaled = scaler_x.fit_transform(x_train)
+x_test_scaled = scaler_x.transform(x_test)
+
+scaler_y = MinMaxScaler()
+y_train_scaled = scaler_y.fit_transform(y_train.values.reshape(-1,1))
+
+
+from sklearn.preprocessing import PolynomialFeatures
+poly = PolynomialFeatures(degree=2, interaction_only=False, include_bias=False)
+x_train_poly = poly.fit_transform(x_train_scaled)
+x_test_poly = poly.transform(x_test_scaled)
+
+
+import optuna
+from optuna import Trial
+from optuna.samplers import TPESampler
+from xgboost import XGBRegressor
+from sklearn.ensemble import VotingRegressor
 from sklearn.linear_model import HuberRegressor
 from sklearn.ensemble import HistGradientBoostingRegressor
 model_1 = HistGradientBoostingRegressor()
 
 model_2 = HuberRegressor()
 
-from sklearn.preprocessing import StandardScaler
 
-scaler = StandardScaler()
-x_train_scaled = scaler.fit_transform(x_train)
-x_test_scaled = scaler.transform(x_test)
+# Train XGBoost Regressor with default parameters (can also be tuned)
+xgb_model = XGBRegressor(n_estimators=850, learning_rate=0.008, max_depth=16, colsample_bytree=0.9, objective='reg:tweedie')
+# xgb_model.fit(x_train_poly, y_train_scaled.ravel())
 
-model_1.fit(x_train_scaled, y_train)
-model_2.fit(x_train_scaled, y_train)
+# model_1.fit(x_train_scaled, y_train_scaled.ravel())  # Use ravel() to flatten for regression
+# model_2.fit(x_train_scaled, y_train_scaled.ravel())
 
-# Feature importance
-# importances = model_1.feature_importances_
-# feature_names = x_train.columns
-# sorted_importances = sorted(zip(importances, feature_names), reverse=True)
-# print("Feature Importances:")
-# for importance, feature in sorted_importances:
-#     print(f"{feature}: {importance:.2f}")
+#Ensembling using Voting Regressor
+# ensemble_model = VotingRegressor(estimators=[
+#     # ('hist', model_1),
+#     # ('hub', model_2),
+#     ('xgb', xgb_model)
+# ])
 
+# ensemble_model.fit(x_train_poly, y_train_scaled .ravel())
 
-predictions_1 = model_1.predict(x_test_scaled)
-predictions_2 = model_2.predict(x_test_scaled)
-df_pred_1 = pd.DataFrame({"Predictions": predictions_1, "Actual": y_test})
-df_pred_2 = pd.DataFrame({"Predictions": predictions_2, "Actual": y_test})
+import joblib
 
-y_actual = np.array(y_test)
-y_predicted_1 = np.array(predictions_1)
-y_predicted_2 = np.array(predictions_2)
+# Save the trained ensemble model
+# joblib.dump(ensemble_model, "ensemble_model.pkl")
+ensemble_model = joblib.load("ensemble_model.pkl")
+# Predictions
+ensemble_predictions = ensemble_model.predict(x_test_poly)
+ensemble_predictions = scaler_y.inverse_transform(ensemble_predictions.reshape(-1, 1))
 
-
-# Calculate MPAE
-mpae_1 = np.mean(np.abs((y_actual - y_predicted_1) / y_actual)) * 100
-# print(f"MPAE: {mpae_1:.2f}%")
-
-# Calculate MPAE
-mpae_2 = np.mean(np.abs((y_actual - y_predicted_2) / y_actual)) * 100
-# print(f"MPAE: {mpae_2:.2f}%")
-
+# Model Performance
+rmse, r2, mae=evaluate_model_performance(ensemble_predictions, y_test.to_numpy().reshape(-1, 1))
 
 #User Variables:
 user_age = 0
@@ -128,7 +129,7 @@ def preprocess_input(age, bmi, sex, region, smoker,children):
     user_df = pd.DataFrame([user_data])
 
     # Scale the inputs
-    user_scaled = scaler.transform(user_df)
+    user_scaled = scaler_y.transform(user_df)
     return user_scaled
 
 predicted_charge = 0
@@ -144,33 +145,19 @@ def reset(state):
 def predict_insurance(state):
     user_scaled = preprocess_input(state.user_age, state.user_bmi, state.user_sex, state.user_region, state.user_smoker, state.user_children)
     state.predicted_charge = (model_2.predict(user_scaled)[0]).round(2)
-     # tgb.html("h6","""A predictive model to estimate the insurance charges based on a client's attributes, such as age and health factors.\n""")
 
-    # with tgb.layout("1 1", gap="30px"):
-    #     with tgb.part():
-    #         tgb.text("Following is the given data : ")
-    #         tgb.table("{df.head()}")
-    #     with tgb.part():
-    #         tgb.text("Following is the correlation matrix of the given data : ")
-    #         tgb.table("{sorted_corr}")
-    #
-    # with tgb.layout("1 1", gap="30px"):
-    #     with tgb.part():
-    #         tgb.text("Stacking Regressor Model")
-    #         # tgb.table("{df_pred_1.head()}")
-    #         tgb.text("MPAE error of model : {mpae_1.round(3)}%")
-    #     with tgb.part():
-    #         tgb.text("Huber Regressor Model")
-    #         # tgb.table("{df_pred_2.head()}")
-    #         tgb.text("MPAE error of model : {mpae_2.round(3)}%")
 image = "logo.jpg"
 page = """
 <|text-center|
 <|{image}|image|width=800px|height=200px|>
 <h1>INSURANCE CHARGE PREDICTOR</h1>
 
-<h6>This predictor uses hubber regressor to predict the insurance charge using various factors like user's age and BMI etc.</h6>
-
+<h6>This predictor uses XGBoost regressor to predict the insurance charge using various factors like user's age and BMI etc.</h6>
+<|layout|columns = 1 1 1 1|
+# MAE : <|metric|value={mae:.2f}|>
+# RMSE : <|metric|value={rmse:.2f}|>
+# R² : <|metric|value={r2:.2f}|>
+|>
 ## <|Enter your details|>
 
 ## <|Enter your age : |><|{user_age}|number|>
@@ -188,12 +175,12 @@ Number of children : <|{user_children}|number|width = 600px|>
 <|Submit|button|on_action=predict_insurance|width = 500px|>
 <|Reset|button|on_action=reset|width = 500px|>
 
-## Predicted Insurance Charge: 
+## Predicted Insurance Charge:
 <|${predicted_charge}|text|width=100px|height=200px|>
 >
 """
 
 if __name__== "__main__":
     app = Gui(page)
-    port = int(os.environ.get("PORT", 5003))
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
